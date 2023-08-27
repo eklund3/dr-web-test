@@ -152,7 +152,7 @@ void InterpolationWidget::on_controls_state_change(bool state)
 
 bool InterpolationWidget::read_csv(QString file_name, Points &points)
 {
-    QFile file(file_name);
+    QFile file(QCoreApplication::applicationDirPath()+"/"+file_name);
     if(!file.open(QIODevice::ReadOnly)) {
         return false;
     } else {

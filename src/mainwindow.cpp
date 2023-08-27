@@ -21,7 +21,6 @@ MainWindow::MainWindow(QStringList arguments, QWidget *parent)
 
 MainWindow::~MainWindow()
 {
-    //sh_p_interp_widget.reset();
     delete ui;
 }
 
