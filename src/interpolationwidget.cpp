@@ -211,6 +211,7 @@ void InterpolationWidget::draw_graph_exec()
             ui->status->setText("Недостаточно данных для интерполяции.");
             ui->customPlot->graph(1)->data()->clear();
             emit update_graph();
+            emit change_controls_state(true);
             continue;
         }
 
@@ -262,7 +263,7 @@ void InterpolationWidget::draw_graph_exec()
         ui->customPlot->graph(1)->setData(x_interp, y_interp);
         ui->status->setText("Готово!");
         emit update_graph();
-        change_controls_state(true);
+        emit change_controls_state(true);
     }
 }
 
