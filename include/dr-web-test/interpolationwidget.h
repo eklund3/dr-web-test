@@ -36,6 +36,8 @@ signals:
 
     void change_controls_state(bool state);
 
+    void input_await(int row, bool state);
+
 private slots:
     void on_table_cellChanged(int row, int column);
 
@@ -44,6 +46,8 @@ private slots:
     void on_update_graph();
 
     void on_controls_state_change(bool state);
+
+    void on_input_await(int row_awaiting, bool state);
 
 private:
     // парсит csv файл и заполняет points
@@ -72,6 +76,7 @@ private:
     std::atomic_bool toExit = false;
 
     bool m_failed = false;
+    bool m_await_input = false;
 
     int m_last_added_row = -1;
     bool m_isEditing = false;

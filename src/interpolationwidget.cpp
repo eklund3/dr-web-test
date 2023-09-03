@@ -65,6 +65,8 @@ InterpolationWidget::InterpolationWidget(QString file_name, QWidget *parent) :
                      this, &InterpolationWidget::on_update_graph);
     QObject::connect(this, &InterpolationWidget::change_controls_state,
                      this, &InterpolationWidget::on_controls_state_change);
+    QObject::connect(this, &InterpolationWidget::input_await,
+                     this, &InterpolationWidget::on_input_await);
 
 
     QFuture future = QtConcurrent::run(this, &InterpolationWidget::draw_graph_exec);
@@ -102,7 +104,8 @@ void InterpolationWidget::on_table_cellChanged(int row, int column)
     float new_value = sNew_value.toFloat(&ok);
     bool is_x = column == XCOL ? true : false;
     if (!ok) {
-        ui->status->setText("Не удается установить значение \"" + sNew_value + "\". Проверьте корректность ввода!");
+        ui->status->setText("Не удается установить значение \""
+                            + sNew_value + "\". Проверьте корректность ввода!");
         ui->table->blockSignals(true);
         ui->table->item(row, column)->setText(QString::number(
                                                   is_x ? m_points[row].x : m_points[row].y,
@@ -110,6 +113,20 @@ void InterpolationWidget::on_table_cellChanged(int row, int column)
         ui->table->blockSignals(false);
         m_isEditing = false;
         return;
+    } else {
+        int point_ind =  sNew_value.lastIndexOf('.');
+        if (point_ind != -1 && sNew_value.size() - point_ind - 1 > PREC) {
+            int precision = PREC;
+            new_value = TO_PREC(new_value);
+            QMessageBox warningMsg;
+            warningMsg.setText(QString("Вы ввели значение, с точностью больше "
+                                       + QString::number(precision) +
+                                       " знаков. Значение округлено до "
+                                       + QString::number(TO_PREC(new_value)) + "."));
+            warningMsg.setWindowTitle("Предупреждение");
+            warningMsg.setIcon(QMessageBox::Warning);
+            warningMsg.exec();
+        }
     }
     ui->table->blockSignals(true);
     ui->table->item(row, column)->setText(QString::number(new_value, 10, PREC));
@@ -128,6 +145,8 @@ void InterpolationWidget::on_table_cellChanged(int row, int column)
         m_last_added_row = -1;
         await_draw_cv.notify_all();
     }
+    emit input_await(row, false);
+
 }
 
 void InterpolationWidget::on_methodBox_currentIndexChanged(int index)
@@ -148,6 +167,27 @@ void InterpolationWidget::on_controls_state_change(bool state)
 {
     ui->table->setEnabled(state);
     ui->methodBox->setEnabled(state);
+}
+
+void InterpolationWidget::on_input_await(int row_awaiting, bool state)
+{
+    ui->table->blockSignals(true);
+    for (int row = 0; row < ui->table->rowCount(); row++) {
+        if (row == row_awaiting)
+            continue;
+        for (int col = 0; col < ui->table->columnCount(); col++) {
+            QTableWidgetItem* item = ui->table->item(row, col);
+            if (state) {
+                item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+                item->setBackground(Qt::gray);
+            } else {
+                item->setFlags(item->flags() | Qt::ItemIsEditable);
+                item->setBackground(Qt::transparent);
+            }
+        }
+    }
+    ui->table->blockSignals(false);
+    m_await_input = state;
 }
 
 bool InterpolationWidget::read_csv(QString file_name, Points &points)
@@ -177,8 +217,10 @@ bool InterpolationWidget::read_csv(QString file_name, Points &points)
         }
     }
     file.close();
-    std::sort(m_points.begin(), m_points.end(), [](const Point& a, const Point& b) {return a.x < b.x;});
-    auto last = std::unique(m_points.begin(), m_points.end(), [](const Point& a, const Point& b) {return abs(a.x - b.x) < EPS;});
+    std::sort(m_points.begin(), m_points.end(),
+              [](const Point& a, const Point& b) {return a.x < b.x;});
+    auto last = std::unique(m_points.begin(), m_points.end(),
+                            [](const Point& a, const Point& b) {return abs(a.x - b.x) < EPS;});
     m_points.erase(last, m_points.end());
     return true;
 }
@@ -216,7 +258,7 @@ void InterpolationWidget::draw_graph_exec()
         }
 
         //отрисовываем интерполированные данные
-        QVector<double> x_interp(points_count-1, 0.0), y_interp(points_count-1,0.0);
+        QVector<double> x_interp(points_count, 0.0), y_interp(points_count,0.0);
         LinearInterp linear;
         LagrangePoly lagrange;
         CubicSpline spline;
@@ -258,6 +300,8 @@ void InterpolationWidget::draw_graph_exec()
             y_interp[i] = interpolator->at(x, m_points);
             i++;
         }
+        x_interp.resize(i);
+        y_interp.resize(i);
         x_interp.append(x_init);
         y_interp.append(y_init);
         ui->customPlot->graph(1)->setData(x_interp, y_interp);
@@ -295,22 +339,24 @@ bool InterpolationWidget::redraw_table()
 bool InterpolationWidget::change_coord(float new_value, int row, bool is_x, bool *was_permutation)
 {
     float x_val = is_x ? new_value : m_points[row].x;
-    float& val = is_x ?  m_points[row].x : m_points[row].y;
-    if (abs(new_value - val) < EPS)
-        return false;
+    float& val = is_x ? m_points[row].x : m_points[row].y;
+//    if (abs(new_value - val) < EPS)
+//        return false;
 
     bool need2sort = false;
     *was_permutation = false;
 
-    if (row != 0 && row != m_points.size()) {
+    if (row != 0 && row != m_points.size()-1) {
         if (x_val <= m_points[row-1].x || x_val >= m_points[row+1].x) {
             need2sort = true;
         }
     } else if (row == 0) {
-        if (x_val >= m_points[row+1].x) {
-            need2sort = true;
+        if (m_points.size() != 1) {
+            if (x_val >= m_points[row+1].x) {
+                need2sort = true;
+            }
         }
-    } else if (row == m_points.size()) {
+    } else if (row == m_points.size()-1) {
         if (x_val <= m_points[row-1].x) {
             need2sort = true;
         }
@@ -318,8 +364,10 @@ bool InterpolationWidget::change_coord(float new_value, int row, bool is_x, bool
 
     val = new_value;
     if (need2sort) {
-        std::sort(m_points.begin(), m_points.end(), [](const Point& a, const Point& b) {return a.x < b.x;});
-        auto last = std::unique(m_points.begin(), m_points.end(), [](const Point& a, const Point& b) {return abs(a.x - b.x) < EPS;});
+        std::sort(m_points.begin(), m_points.end(),
+                  [](const Point& a, const Point& b) {return a.x < b.x;});
+        auto last = std::unique(m_points.begin(), m_points.end(),
+                                [](const Point& a, const Point& b) {return abs(a.x - b.x) < EPS;});
         m_points.erase(last, m_points.end());
         *was_permutation = true;
     }
@@ -371,23 +419,17 @@ bool InterpolationWidget::eventFilter(QObject *target, QEvent *event)
                         return false;
                 if (m_last_added_row == -1) {
                     int row = ui->table->currentRow();
-                    bool contain_zero = points_contains(0.0);
                     insert_new_point_after(row,  Point(0.0,0.0));
-                    redraw_table();
                     ui->table->selectRow(row+1);
-                    if (contain_zero)
-                        m_last_added_row = row+1;
-                    else {
-                        std::sort(m_points.begin(), m_points.end(),
-                                  [](const Point& a, const Point& b) {return a.x < b.x;});
-                        auto last = std::unique(m_points.begin(), m_points.end(),
-                                                [](const Point& a, const Point& b) {return abs(a.x - b.x) < EPS;});
-                        m_points.erase(last, m_points.end());
-                        await_draw_cv.notify_all();
-                    }
+                    m_last_added_row = row+1;
+                    redraw_table();
+                    emit input_await(m_last_added_row, true);
+
                 } else {
                     QMessageBox warningMsg;
-                    warningMsg.setText("Координаты последней добавленной точки в строке " + QString::number(m_last_added_row+1) + " ещё не заполнены! Прежде чем добавлять новую точку, заполните предыдущюю точку!");
+                    warningMsg.setText("Координаты последней добавленной точки в строке "
+                                       + QString::number(m_last_added_row+1)
+                                       + " ещё не заполнены! Прежде чем добавлять новую точку, заполните предыдущюю точку!");
                     warningMsg.setWindowTitle("Предупреждение");
                     warningMsg.setIcon(QMessageBox::Warning);
                     warningMsg.exec();
@@ -395,6 +437,15 @@ bool InterpolationWidget::eventFilter(QObject *target, QEvent *event)
 
             } else if (ev->key() == Qt::Key::Key_Delete) {
                 int row = ui->table->currentRow();
+                if (m_await_input) {
+                    if (row == m_last_added_row) {
+                        emit input_await(m_last_added_row, false);
+                        m_last_added_row = -1;
+                        remove_point(row);
+                        redraw_table();
+                    }
+                    return false;
+                }
                 if (m_last_added_row != -1) {
                     if (row != m_last_added_row) {
                         remove_point(m_last_added_row);
